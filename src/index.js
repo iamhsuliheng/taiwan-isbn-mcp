@@ -56,7 +56,6 @@ ${ATTRIBUTION}`,
     async ({ query, field, limit }) => {
       if (!query?.trim()) return { content: [{ type: "text", text: "請提供搜尋關鍵字。" }] };
       const q = `%${query.trim()}%`;
-      // 若 search_text 欄存在（新版 ingest 後）優先使用；否則 fallback 至個別欄位
       let whereClause;
       if (field === "title")     whereClause = "title LIKE ?1";
       else if (field === "author")    whereClause = "author LIKE ?1";
@@ -230,11 +229,12 @@ export default {
 
       // 修正：部分 MCP 客戶端（如 HTTPBot）在呼叫無參數工具時，
       // 不帶 arguments 欄位或傳 null，導致 SDK 驗證失敗（-32602）。
-      // 在交給 transport 前攔截 POST 請求，若為 tools/call 且 arguments 缺失則補 {}。
+      // 用 request.clone() 讀副本，確保原始 body stream 不被消耗，
+      // transport 仍可正常讀取原始 request。
       let patchedRequest = request;
       if (request.method === "POST") {
         try {
-          const body = await request.json();
+          const body = await request.clone().json();
           if (body?.method === "tools/call" && body?.params?.arguments == null) {
             const patched = { ...body, params: { ...body.params, arguments: {} } };
             patchedRequest = new Request(request.url, {
