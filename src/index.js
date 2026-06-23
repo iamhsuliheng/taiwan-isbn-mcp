@@ -31,7 +31,7 @@ const SCHEMA = [
   { column: "form",        description: "出版形式" },
   { column: "keywords",    description: "關鍵字" },
   { column: "pub_type",    description: "出版機構類型" },
-  { column: "search_text", description: "全文搜尋欄（書名+作者+出版機構+主題+關鍵字合併，ingest 時生成）；重新 ingest 後可用」 },
+  { column: "search_text", description: "全文搜尋欄（書名+作者+出版機構+主題+關鍵字合併，ingest 時生成）；重新 ingest 後可用" },
 ];
 
 function createServer(env) {
