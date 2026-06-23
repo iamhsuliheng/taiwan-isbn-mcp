@@ -3,10 +3,6 @@ main = "src/index.js"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-[[kv_namespaces]]
-binding = "ISBN_KV"
-id = "6f7e087cb5a74d8cb861c8979fc20723"
-
 [[d1_databases]]
 binding = "ISBN_DB"
 database_name = "taiwan-isbn-db"
