@@ -6,7 +6,7 @@ import { z } from "zod";
 // [2026] 為資料取得年份；跨年重新 ingest 後須同步更新。
 const ATTRIBUTION = `提供機關／國家圖書館 [2026]「臺灣出版新書預告書訊」此開放資料依政府資料開放授權條款（Open Government Data License）進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。政府資料開放授權條款：https://data.gov.tw/license`;
 
-const VERSION = "3.0.0";
+const VERSION = "3.1.0";
 
 // books 表欄位說明（供 get_schema 工具回傳）
 const SCHEMA = [
@@ -34,6 +34,30 @@ const SCHEMA = [
   { column: "search_text", description: "全文搜尋欄（書名+作者+出版機構+主題+關鍵字合併，ingest 時生成）；重新 ingest 後可用" },
 ];
 
+// ── 格式化工具函數 ────────────────────────────────────────────────────────────
+// format: "json"（預設，AI 處理）| "text"（格式化純文字，人類可讀）
+function formatResults(results, format) {
+  if (format === "text") {
+    return results.map(r => {
+      const lines = [];
+      if (r.title)     lines.push(`書名：${r.title}`);
+      if (r.author)    lines.push(`作者：${r.author}`);
+      if (r.publisher) lines.push(`出版社：${r.publisher}`);
+      if (r.pub_date)  lines.push(`出版日：${r.pub_date}`);
+      if (r.category)  lines.push(`分類：${r.category}`);
+      if (r.doc_type)  lines.push(`類型：${r.doc_type}`);
+      if (r.price)     lines.push(`定價：${r.price}`);
+      if (r.isbn)      lines.push(`ISBN：${r.isbn}`);
+      return lines.join("\n");
+    }).join("\n\n");
+  }
+  return JSON.stringify(results);
+}
+
+const FORMAT_PARAM = z.enum(["json", "text"])
+  .optional().default("json")
+  .describe("回傳格式：json（預設，AI 處理效率最佳）、text（格式化純文字，適合純文字客戶端人類閱讀）");
+
 function createServer(env) {
   const server = new McpServer({ name: "taiwan-isbn-mcp", version: VERSION });
 
@@ -52,22 +76,23 @@ ${ATTRIBUTION}`,
       limit: z.number().int().min(1).max(50)
         .optional().default(10)
         .describe("最多回傳幾筆，預設 10，最大 50"),
+      format: FORMAT_PARAM,
     },
-    async ({ query, field, limit }) => {
+    async ({ query, field, limit, format }) => {
       if (!query?.trim()) return { content: [{ type: "text", text: "請提供搜尋關鍵字。" }] };
       const q = `%${query.trim()}%`;
       let whereClause;
-      if (field === "title")     whereClause = "title LIKE ?1";
+      if (field === "title")          whereClause = "title LIKE ?1";
       else if (field === "author")    whereClause = "author LIKE ?1";
       else if (field === "publisher") whereClause = "publisher LIKE ?1";
       else whereClause = "(title LIKE ?1 OR author LIKE ?1 OR publisher LIKE ?1 OR subject LIKE ?1 OR keywords LIKE ?1)";
       try {
-        const sql = `SELECT isbn, title, author, publisher, pub_date, ym, category, doc_type, price FROM books WHERE ${whereClause} LIMIT ?2`;
+        const sql = `SELECT isbn, title, author, publisher, pub_date, category, doc_type, price FROM books WHERE ${whereClause} LIMIT ?2`;
         const { results } = await env.ISBN_DB.prepare(sql).bind(q, limit).all();
         if (!results || results.length === 0) {
           return { content: [{ type: "text", text: `查無符合「${query}」的書目。\n\n${ATTRIBUTION}` }] };
         }
-        return { content: [{ type: "text", text: `${JSON.stringify(results)}\n\n${ATTRIBUTION}` }] };
+        return { content: [{ type: "text", text: `${formatResults(results, format)}\n\n${ATTRIBUTION}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `查詢錯誤：${e.message}` }] };
       }
@@ -82,16 +107,17 @@ ${ATTRIBUTION}`,
     {
       isbns: z.array(z.string()).min(1).max(50)
         .describe("ISBN 書號陣列，如 [\"9786263148765\", \"9789571398501\"]"),
+      format: FORMAT_PARAM,
     },
-    async ({ isbns }) => {
+    async ({ isbns, format }) => {
       const placeholders = isbns.map((_, i) => `?${i + 1}`).join(", ");
       try {
-        const sql = `SELECT * FROM books WHERE isbn IN (${placeholders})`;
+        const sql = `SELECT isbn, title, author, publisher, pub_date, category, doc_type, price, audience, subject, keywords FROM books WHERE isbn IN (${placeholders})`;
         const { results } = await env.ISBN_DB.prepare(sql).bind(...isbns).all();
         if (!results || results.length === 0) {
           return { content: [{ type: "text", text: `查無符合的書目。\n\n${ATTRIBUTION}` }] };
         }
-        return { content: [{ type: "text", text: `${JSON.stringify(results)}\n\n${ATTRIBUTION}` }] };
+        return { content: [{ type: "text", text: `${formatResults(results, format)}\n\n${ATTRIBUTION}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `查詢錯誤：${e.message}` }] };
       }
@@ -118,8 +144,9 @@ ${ATTRIBUTION}`,
       offset: z.number().int().min(0)
         .optional().default(0)
         .describe("跳過幾筆（分頁用），預設 0"),
+      format: FORMAT_PARAM,
     },
-    async ({ month, category, audience, limit, offset }) => {
+    async ({ month, category, audience, limit, offset, format }) => {
       const conditions = ["ym = ?1"];
       const bindings = [month];
       let p = 2;
@@ -141,7 +168,7 @@ ${ATTRIBUTION}`,
           return { content: [{ type: "text", text: `${month} 查無符合條件的書目（共 ${total} 筆）。\n\n${ATTRIBUTION}` }] };
         }
         const note = `（${month} 共 ${total} 筆，目前第 ${offset + 1}–${offset + results.length} 筆）`;
-        return { content: [{ type: "text", text: `${JSON.stringify(results)}\n${note}\n\n${ATTRIBUTION}` }] };
+        return { content: [{ type: "text", text: `${formatResults(results, format)}\n${note}\n\n${ATTRIBUTION}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `查詢錯誤：${e.message}` }] };
       }
@@ -227,10 +254,6 @@ export default {
       const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       await server.connect(transport);
 
-      // 修正：部分 MCP 客戶端（如 HTTPBot）在呼叫無參數工具時，
-      // 不帶 arguments 欄位或傳 null，導致 SDK 驗證失敗（-32602）。
-      // 用 request.clone() 讀副本，確保原始 body stream 不被消耗，
-      // transport 仍可正常讀取原始 request。
       let patchedRequest = request;
       if (request.method === "POST") {
         try {
