@@ -231,7 +231,7 @@ function createServer(env) {
         }
         const capped = results.slice(0, 200);
         const note = results.length > 200 ? `\n（結果共 ${results.length} 列，僅顯示前 200 列）` : "";
-        const out = JSON.stringify(capped, null, 2);
+        const out = JSON.stringify(capped);
         return { content: [{ type: "text", text: `${out}${note}\n\n${ATTRIBUTION}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `查詢錯誤：${e.message}` }] };
