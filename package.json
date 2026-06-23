@@ -1,0 +1,17 @@
+{
+  "name": "taiwan-isbn-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Taiwan published book data (ISBN new book announcements from National Central Library)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "ingest": "node scripts/ingest.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.14.0"
+  }
+}
