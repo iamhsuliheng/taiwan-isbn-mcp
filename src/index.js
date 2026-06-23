@@ -227,7 +227,28 @@ export default {
       const server = createServer(env);
       const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       await server.connect(transport);
-      return transport.handleRequest(request);
+
+      // 修正：部分 MCP 客戶端（如 HTTPBot）在呼叫無參數工具時，
+      // 不帶 arguments 欄位或傳 null，導致 SDK 驗證失敗（-32602）。
+      // 在交給 transport 前攔截 POST 請求，若為 tools/call 且 arguments 缺失則補 {}。
+      let patchedRequest = request;
+      if (request.method === "POST") {
+        try {
+          const body = await request.json();
+          if (body?.method === "tools/call" && body?.params?.arguments == null) {
+            const patched = { ...body, params: { ...body.params, arguments: {} } };
+            patchedRequest = new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: JSON.stringify(patched),
+            });
+          }
+        } catch {
+          // body 不是合法 JSON，直接讓 transport 自己處理
+        }
+      }
+
+      return transport.handleRequest(patchedRequest);
     }
 
     return new Response("Not Found", { status: 404 });
