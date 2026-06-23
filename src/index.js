@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { z } from "zod";
 
 const ATTRIBUTION = `資料來源：國家圖書館「臺灣出版新書預告書訊」，依政府資料開放授權條款第1版（https://data.gov.tw/license）公眾釋出。`;
 const BASE_CSV_URL = "https://isbn.ncl.edu.tw/NEW_ISBNNet/opendata";
@@ -99,85 +100,99 @@ function matchesQuery(book, query, field) {
 function createServer(env) {
   const server = new McpServer({ name: "taiwan-isbn-mcp", version: "1.0.0" });
 
-  server.tool("search_books", `搜尋台灣出版圖書。${ATTRIBUTION}`, {
-    query: { type: "string", description: "搜尋關鍵字" },
-    field: { type: "string", description: "限定欄位：title/author/publisher/isbn，留空搜全部" },
-    year_month: { type: "string", description: "限定月份 YYYYMM，留空搜最近6月" },
-    limit: { type: "number", description: "上限，預設20，最奇50" },
-  }, async ({ query, field, year_month, limit }) => {
-    if (!query?.trim()) return { content: [{ type: "text", text: "請提供搜尋關鍵字。" }] };
-    const max = Math.min(limit || 20, 50);
-    let months = [];
-    if (year_month) { months = [year_month]; }
-    else {
-      const m = await env.ISBN_KV.get("meta:info");
-      if (!m) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
-      months = JSON.parse(m).months.slice(-6);
-    }
-    const results = [];
-    for (const mo of months) {
-      if (results.length >= max) break;
-      const raw = await env.ISBN_KV.get(`month:${mo}`);
-      if (!raw) continue;
-      for (const book of JSON.parse(raw)) {
-        if (results.length >= max) break;
-        if (matchesQuery(book, query.trim(), field || "")) results.push(book);
+  server.tool("search_books",
+    `搜尋台灣出版圖書。可依書名、作者、出版社或關鍵字搜尋。${ATTRIBUTION}`,
+    {
+      query: z.string().describe("搜尋關鍵字（書名、作者、出版社等）"),
+      field: z.enum(["title", "author", "publisher", "isbn", ""]).optional().describe("限定搜尋欄位：title/author/publisher/isbn，留空搜全部"),
+      year_month: z.string().optional().describe("限定月份 YYYYMM，留空搜最近6月"),
+      limit: z.number().optional().describe("上限，預設20，最大50"),
+    },
+    async ({ query, field, year_month, limit }) => {
+      if (!query?.trim()) return { content: [{ type: "text", text: "請提供搜尋關鍵字。" }] };
+      const max = Math.min(limit || 20, 50);
+      let months = [];
+      if (year_month) { months = [year_month]; }
+      else {
+        const m = await env.ISBN_KV.get("meta:info");
+        if (!m) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
+        months = JSON.parse(m).months.slice(-6);
       }
+      const results = [];
+      for (const mo of months) {
+        if (results.length >= max) break;
+        const raw = await env.ISBN_KV.get(`month:${mo}`);
+        if (!raw) continue;
+        for (const book of JSON.parse(raw)) {
+          if (results.length >= max) break;
+          if (matchesQuery(book, query.trim(), field || "")) results.push(book);
+        }
+      }
+      if (!results.length) return { content: [{ type: "text", text: `找不到「${query}」。\n\n${ATTRIBUTION}` }] };
+      let out = `找到 ${results.length} 筆：\n\n`;
+      for (const b of results) out += `---\n${formatBook(b)}\n`;
+      return { content: [{ type: "text", text: out + `\n${ATTRIBUTION}` }] };
     }
-    if (!results.length) return { content: [{ type: "text", text: `找不到「${query}」。\n\n${ATTRIBUTION}` }] };
-    let out = `找到 ${results.length} 筆：\n\n`;
-    for (const b of results) out += `---\n${formatBook(b)}\n`;
-    return { content: [{ type: "text", text: out + `\n${ATTRIBUTION}` }] };
-  });
+  );
 
-  server.tool("get_book", `依ISBN查詢圖書。${ATTRIBUTION}`, {
-    isbn: { type: "string", description: "ISBN" },
-  }, async ({ isbn }) => {
-    if (!isbn?.trim()) return { content: [{ type: "text", text: "請提供ISBN。" }] };
-    const clean = isbn.replace(/[-\s]/g, "");
-    const idx = await env.ISBN_KV.get("isbn_index");
-    if (!idx) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
-    const mo = JSON.parse(idx)[clean];
-    if (!mo) return { content: [{ type: "text", text: `找不到 ${clean}。\n\n${ATTRIBUTION}` }] };
-    const raw = await env.ISBN_KV.get(`month:${mo}`);
-    if (!raw) return { content: [{ type: "text", text: "讀取失敗。" }] };
-    const book = JSON.parse(raw).find(b => b.i === clean);
-    if (!book) return { content: [{ type: "text", text: "索引不一致。" }] };
-    return { content: [{ type: "text", text: `${formatBook(book)}\n\n${ATTRIBUTION}` }] };
-  });
+  server.tool("get_book",
+    `依ISBN查詢台灣出版圖書。${ATTRIBUTION}`,
+    { isbn: z.string().describe("ISBN（13碼或10碼）") },
+    async ({ isbn }) => {
+      if (!isbn?.trim()) return { content: [{ type: "text", text: "請提供ISBN。" }] };
+      const clean = isbn.replace(/[-\s]/g, "");
+      const idx = await env.ISBN_KV.get("isbn_index");
+      if (!idx) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
+      const mo = JSON.parse(idx)[clean];
+      if (!mo) return { content: [{ type: "text", text: `找不到 ${clean}。\n\n${ATTRIBUTION}` }] };
+      const raw = await env.ISBN_KV.get(`month:${mo}`);
+      if (!raw) return { content: [{ type: "text", text: "讀取失敗。" }] };
+      const book = JSON.parse(raw).find(b => b.i === clean);
+      if (!book) return { content: [{ type: "text", text: "索引不一致。" }] };
+      return { content: [{ type: "text", text: `${formatBook(book)}\n\n${ATTRIBUTION}` }] };
+    }
+  );
 
-  server.tool("browse_new_books", `瀏覽月份新書。${ATTRIBUTION}`, {
-    year_month: { type: "string", description: "YYYYMM，留空最新月" },
-    category: { type: "string", description: "篩選分類" },
-    audience: { type: "string", description: "篩選對象" },
-    offset: { type: "number", description: "起始位置" },
-    limit: { type: "number", description: "上限，預設20" },
-  }, async ({ year_month, category, audience, offset, limit }) => {
-    const max = Math.min(limit || 20, 50), off = offset || 0;
-    let mo = year_month;
-    if (!mo) {
+  server.tool("browse_new_books",
+    `瀏覽指定月份的台灣新書預告書訊。${ATTRIBUTION}`,
+    {
+      year_month: z.string().optional().describe("YYYYMM，留空最新月"),
+      category: z.string().optional().describe("篩選上架分類"),
+      audience: z.string().optional().describe("篩選適讀對象"),
+      offset: z.number().optional().describe("起始位置，預設0"),
+      limit: z.number().optional().describe("上限，預設20，最大50"),
+    },
+    async ({ year_month, category, audience, offset, limit }) => {
+      const max = Math.min(limit || 20, 50), off = offset || 0;
+      let mo = year_month;
+      if (!mo) {
+        const m = await env.ISBN_KV.get("meta:info");
+        if (!m) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
+        const meta = JSON.parse(m); mo = meta.months[meta.months.length - 1];
+      }
+      const raw = await env.ISBN_KV.get(`month:${mo}`);
+      if (!raw) return { content: [{ type: "text", text: `找不到 ${mo}。` }] };
+      let books = JSON.parse(raw);
+      if (category) { const c = category.toLowerCase(); books = books.filter(b => (b.cat||"").toLowerCase().includes(c) || (b.sub||"").toLowerCase().includes(c)); }
+      if (audience) { const a = audience.toLowerCase(); books = books.filter(b => (b.au||"").toLowerCase().includes(a)); }
+      const total = books.length, page = books.slice(off, off + max);
+      let out = `${mo.slice(0,4)} 年 ${parseInt(mo.slice(4))} 月（共 ${total} 筆，第 ${off+1}–${off+page.length}）\n\n`;
+      for (const b of page) { out += `---\n書名：${b.t||"?"}\n作者：${b.a||"?"}\n出版：${b.p||""}\n${b.i?"ISBN："+b.i+"\n":""}${b.price&&b.price!=="0"?"定價："+b.price+"\n":""}${b.cat?"分類："+b.cat+"\n":""}`; }
+      if (off + page.length < total) out += `\n（還有 ${total-off-page.length} 筆，offset=${off+max}）\n`;
+      return { content: [{ type: "text", text: out + `\n${ATTRIBUTION}` }] };
+    }
+  );
+
+  server.tool("get_stats",
+    `台灣出版新書預告書訊資料庫統計。${ATTRIBUTION}`,
+    {},
+    async () => {
       const m = await env.ISBN_KV.get("meta:info");
       if (!m) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
-      const meta = JSON.parse(m); mo = meta.months[meta.months.length - 1];
+      const meta = JSON.parse(m);
+      return { content: [{ type: "text", text: `收錄：${meta.months[0]}~${meta.months[meta.months.length-1]}，${meta.months.length}月，${meta.totalRecords.toLocaleString()}筆\n更新：${meta.lastUpdate}\n\n${ATTRIBUTION}` }] };
     }
-    const raw = await env.ISBN_KV.get(`month:${mo}`);
-    if (!raw) return { content: [{ type: "text", text: `找不到 ${mo}。` }] };
-    let books = JSON.parse(raw);
-    if (category) { const c = category.toLowerCase(); books = books.filter(b => (b.cat||"").toLowerCase().includes(c) || (b.sub||"").toLowerCase().includes(c)); }
-    if (audience) { const a = audience.toLowerCase(); books = books.filter(b => (b.au||"").toLowerCase().includes(a)); }
-    const total = books.length, page = books.slice(off, off + max);
-    let out = `${mo.slice(0,4)} 年 ${parseInt(mo.slice(4))} 月（共 ${total} 筆，第 ${off+1}–${off+page.length}）\n\n`;
-    for (const b of page) { out += `---\n書名：${b.t||"?"}\n作者：${b.a||"?"}\n出版：${b.p||""}\n${b.i?"ISBN："+b.i+"\n":""}${b.price&&b.price!=="0"?"定價："+b.price+"\n":""}${b.cat?"分類："+b.cat+"\n":""}`; }
-    if (off + page.length < total) out += `\n（還有 ${total-off-page.length} 筆，offset=${off+max}）\n`;
-    return { content: [{ type: "text", text: out + `\n${ATTRIBUTION}` }] };
-  });
-
-  server.tool("get_stats", `資料庫統計。${ATTRIBUTION}`, {}, async () => {
-    const m = await env.ISBN_KV.get("meta:info");
-    if (!m) return { content: [{ type: "text", text: "資料庫尚未初始化。" }] };
-    const meta = JSON.parse(m);
-    return { content: [{ type: "text", text: `收錄：${meta.months[0]}~${meta.months[meta.months.length-1]}，${meta.months.length}月，${meta.totalRecords.toLocaleString()}筆\n更新：${meta.lastUpdate}\n\n${ATTRIBUTION}` }] };
-  });
+  );
 
   return server;
 }
