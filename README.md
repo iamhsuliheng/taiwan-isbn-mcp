@@ -2,48 +2,55 @@
 
 台灣出版新書預告書訊 MCP Server。
 
-以 Cloudflare Worker 提供台灣 ISBN 書目資料查詢，資料來源為國家圖書館「臺灣出版新書預告書訊」開放資料。
+以 Cloudflare Worker + D1 提供台灣 ISBN 書目資料查詢，資料來源為國家圖書館「臺灣出版新書預告書訊」開放資料。
 
 ## 工具
 
 | 工具 | 說明 |
 |------|------|
-| `search_books` | 依書名、作者、出版社或關鍵字搜尋圖書 |
-| `get_book` | 依 ISBN 查詢圖書詳細資料 |
-| `browse_new_books` | 瀏覽指定月份的新書預告，可依分類、適讀對象篩選 |
-| `get_stats` | 取得資料庫統計資訊 |
+| `search_books` | 依書名、作者、出版機構關鍵字搜尋，可指定搜尋欄位 |
+| `get_books` | 依 ISBN 批次查詢完整書目（一次最多 50 筆） |
+| `browse_new_books` | 瀏覽指定月份的新書清單，可依分類、適讀對象篩選，支援分頁 |
+| `get_stats` | 取得資料庫統計資訊（總筆數、涵蓋月份範圍）|
+| `get_schema` | 查詢 books 資料表的完整欄位說明 |
+| `get_categories` | 查詢資料庫中實際存在的上架分類值清單 |
 
-## 部署
+建議使用順序：`get_stats` → `get_categories` → `search_books` / `browse_new_books`。
 
-### 1. 建立 KV namespace
+## 加入 Claude
 
-```bash
-npx wrangler kv namespace create ISBN_KV
+Settings → Integrations → 新增 MCP → URL：
+
+```
+https://taiwan-isbn-mcp.yesleon-69a.workers.dev/mcp
 ```
 
-把回傳的 namespace ID 填入 `wrangler.toml`。
+## 部署（維護用）
 
-### 2. 部署 Worker
+### 部署 Worker
 
 ```bash
+# 需要 Workers Scripts Write 與 D1 Write 權限的 token
+export CLOUDFLARE_API_TOKEN="..."
 npx wrangler deploy
 ```
 
-或推到 GitHub `main` 分支，GitHub Actions 自動部署。需要在 repo Settings → Secrets → Actions → **Repository secrets** 加入 `CLOUDFLARE_API_TOKEN`。
+### 重新匯入資料
 
-### 3. 匯入資料
+```bash
+export CF_ACCOUNT_ID="69abca4b..."
+export CF_API_TOKEN="<D1 Write token>"
+node scripts/ingest-d1.js
+# 或指定月份：node scripts/ingest-d1.js 202601 202602
+```
 
-部署完成後，瀏覽器打開 Worker 端點的 `/ingest` 路徑，Worker 會自己從國圖下載 CSV 並寫入 KV。
-
-### 4. 加入 Claude
-
-Settings → Integrations → 新增 MCP → URL 填 Worker 端點的 `/mcp` 路徑。
+`ingest-d1.js` 會自動下載 CSV、產生 SQL（含 `search_text` 欄）、透過 D1 Import API 匯入。
 
 ## 資料授權
 
-提供機關／國家圖書館 [2024–2026] [臺灣出版新書預告書訊]
+提供機關／國家圖書館 [2026]「臺灣出版新書預告書訊」
 
-此開放資料依政府資料開放授權條款 (Open Government Data License) 進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。
+此開放資料依政府資料開放授權條款（Open Government Data License）進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。
 
 政府資料開放授權條款：https://data.gov.tw/license
 
