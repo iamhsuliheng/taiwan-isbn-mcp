@@ -131,6 +131,8 @@ function escapeSql(val) {
 function generateSQL(allRecords) {
   const lines = [];
 
+  // DROP + CREATE ensures schema is always up to date (handles column additions)
+  lines.push(`DROP TABLE IF EXISTS books;`);
   lines.push(`CREATE TABLE IF NOT EXISTS books (
   isbn        TEXT,
   title       TEXT,
@@ -189,6 +191,7 @@ async function importToD1(sqlContent) {
   const initData = await initRes.json();
   if (!initData.success) throw new Error(`init failed: ${JSON.stringify(initData.errors)}`);
   const { upload_url, filename } = initData.result;
+  if (!upload_url) throw new Error(`init returned no upload_url: ${JSON.stringify(initData.result)}`);
 
   // Step 2: PUT SQL to R2 presigned URL
   const sizeMB = (Buffer.byteLength(sqlContent, "utf8") / 1024 / 1024).toFixed(1);
@@ -205,24 +208,42 @@ async function importToD1(sqlContent) {
   const ingestRes = await fetch(`${D1_API}/import`, {
     method: "POST",
     headers: CF_HEADERS,
-    body: JSON.stringify({ action: "ingest", filename }),
+    body: JSON.stringify({ action: "ingest", filename, etag }),
   });
   const ingestData = await ingestRes.json();
   if (!ingestData.success) throw new Error(`ingest failed: ${JSON.stringify(ingestData.errors)}`);
-  const { bookmark } = ingestData.result;
 
-  // Step 4: poll until complete
+  const ingestResult = ingestData.result;
+  if (ingestResult.messages?.length) console.log(`    ${ingestResult.messages.join(", ")}`);
+
+  // If already complete (small imports finish synchronously)
+  if (ingestResult.status === "complete") {
+    const meta = ingestResult.result?.meta;
+    if (meta) console.log(`    rows_written: ${meta.rows_written}, changes: ${meta.changes}`);
+    return;
+  }
+
+  // Step 4: poll until complete using at_bookmark
+  const atBookmark = ingestResult.at_bookmark;
+  if (!atBookmark) throw new Error(`ingest returned no at_bookmark: ${JSON.stringify(ingestResult)}`);
+
   console.log("  [D1] polling...");
   for (;;) {
     await new Promise(r => setTimeout(r, 2000));
-    const pollRes = await fetch(`${D1_API}/import?bookmark=${encodeURIComponent(bookmark)}`, {
+    const pollRes = await fetch(`${D1_API}/import`, {
+      method: "POST",
       headers: CF_HEADERS,
+      body: JSON.stringify({ action: "poll", current_bookmark: atBookmark }),
     });
     const pollData = await pollRes.json();
     if (!pollData.success) throw new Error(`poll failed: ${JSON.stringify(pollData.errors)}`);
-    const { status, messages } = pollData.result;
+    const { status, messages, result: pollResult } = pollData.result;
     if (messages?.length) console.log(`    ${messages.join(", ")}`);
-    if (status === "complete") break;
+    if (status === "complete") {
+      const meta = pollResult?.meta;
+      if (meta) console.log(`    rows_written: ${meta.rows_written}, changes: ${meta.changes}`);
+      break;
+    }
     if (status === "error") throw new Error(`import error: ${JSON.stringify(pollData.result)}`);
   }
 }
