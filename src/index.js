@@ -2,7 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 
-const ATTRIBUTION = `資料來源：國家圖書館「臺灣出版新書預告書訊」，依政府資料開放授權條款第1版（https://data.gov.tw/license）公眾釋出。`;
+// 顯名聲明依 OGDL 第一版附件格式（提供機關／年份／資料名稱＋標準聲明＋條款連結）。
+// [2026] 為資料取得年份；跨年重新 ingest 資料後須同步更新此年份。
+const ATTRIBUTION = `提供機關／國家圖書館 [2026]「臺灣出版新書預告書訊」此開放資料依政府資料開放授權條款（Open Government Data License）進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。政府資料開放授權條款：https://data.gov.tw/license`;
 const BASE_CSV_URL = "https://isbn.ncl.edu.tw/NEW_ISBNNet/opendata";
 
 const FIELD_NAMES = {
