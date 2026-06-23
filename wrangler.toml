@@ -5,4 +5,4 @@ compatibility_flags = ["nodejs_compat"]
 
 [[kv_namespaces]]
 binding = "ISBN_KV"
-id = "__REPLACE_WITH_KV_NAMESPACE_ID__"
+id = "6f7e087cb5a74d8cb861c8979fc20723"
