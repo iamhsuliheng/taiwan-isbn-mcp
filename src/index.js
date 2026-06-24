@@ -6,7 +6,7 @@ import { z } from "zod";
 // [2026] 為資料取得年份；跨年重新 ingest 後須同步更新。
 const ATTRIBUTION = `提供機關／國家圖書館 [2026]「臺灣出版新書預告書訊」此開放資料依政府資料開放授權條款（Open Government Data License）進行公眾釋出，使用者於遵守本條款各項規定之前提下，得利用之。政府資料開放授權條款：https://data.gov.tw/license`;
 
-const VERSION = "3.1.0";
+const VERSION = "3.2.0";
 
 // books 表欄位說明（供 get_schema 工具回傳）
 const SCHEMA = [
@@ -52,6 +52,49 @@ function formatResults(results, format) {
     }).join("\n\n");
   }
   return JSON.stringify(results);
+}
+
+function formatStats(stats, format) {
+  if (format === "text") {
+    const from = stats.earliest_month
+      ? `${stats.earliest_month.slice(0, 4)} 年 ${stats.earliest_month.slice(4)} 月`
+      : "—";
+    const to = stats.latest_month
+      ? `${stats.latest_month.slice(0, 4)} 年 ${stats.latest_month.slice(4)} 月`
+      : "—";
+    return [
+      `台灣 ISBN 書目資料庫統計`,
+      ``,
+      `收錄書目：${stats.total_books.toLocaleString()} 筆`,
+      `涵蓋月份：${from} 至 ${to}（共 ${stats.total_months} 個月）`,
+      `月份查詢格式：YYYYMM（例：202601）`,
+    ].join("\n");
+  }
+  return JSON.stringify(stats);
+}
+
+function formatSchema(schema, format) {
+  if (format === "text") {
+    const maxLen = Math.max(...schema.map(s => s.column.length));
+    const header = `欄位名稱${" ".repeat(maxLen - 4)}  說明`;
+    const sep = "─".repeat(maxLen + 2 + 20);
+    const rows = schema.map(s =>
+      `${s.column}${" ".repeat(maxLen - s.column.length)}  ${s.description}`
+    );
+    return [`books 資料表欄位說明（共 ${schema.length} 欄）`, ``, header, sep, ...rows].join("\n");
+  }
+  return JSON.stringify(schema);
+}
+
+function formatCategories(categories, format) {
+  if (format === "text") {
+    return [
+      `可用上架分類（共 ${categories.length} 種）：`,
+      ``,
+      ...categories.map(c => `・${c}`),
+    ].join("\n");
+  }
+  return JSON.stringify(categories);
 }
 
 const FORMAT_PARAM = z.enum(["json", "text"])
@@ -181,8 +224,10 @@ ${ATTRIBUTION}`,
     `查詢台灣 ISBN 書目資料庫的統計資訊：總書目數、涵蓋月份範圍。
 建議在進行其他查詢前先呼叫，確認資料庫收錄範圍。
 ${ATTRIBUTION}`,
-    {},
-    async () => {
+    {
+      format: FORMAT_PARAM,
+    },
+    async ({ format }) => {
       try {
         const [countRes, rangeRes] = await env.ISBN_DB.batch([
           env.ISBN_DB.prepare("SELECT COUNT(*) as total FROM books"),
@@ -197,7 +242,7 @@ ${ATTRIBUTION}`,
           total_months: months,
           month_format: "YYYYMM",
         };
-        return { content: [{ type: "text", text: `${JSON.stringify(stats)}\n\n${ATTRIBUTION}` }] };
+        return { content: [{ type: "text", text: `${formatStats(stats, format)}\n\n${ATTRIBUTION}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `查詢錯誤：${e.message}` }] };
       }
@@ -209,9 +254,11 @@ ${ATTRIBUTION}`,
     "get_schema",
     `查詢 books 資料表的完整欄位說明。
 用於了解可查詢的欄位名稱與含義，適合需要精確欄位名稱的進階情境。`,
-    {},
-    async () => {
-      return { content: [{ type: "text", text: JSON.stringify(SCHEMA) }] };
+    {
+      format: FORMAT_PARAM,
+    },
+    async ({ format }) => {
+      return { content: [{ type: "text", text: formatSchema(SCHEMA, format) }] };
     }
   );
 
@@ -221,14 +268,16 @@ ${ATTRIBUTION}`,
     `查詢資料庫中實際存在的上架分類（category）值清單。
 在使用 browse_new_books 的 category 參數篩選前，建議先呼叫此工具確認可用分類名稱，
 避免因分類名稱不一致而查無結果。`,
-    {},
-    async () => {
+    {
+      format: FORMAT_PARAM,
+    },
+    async ({ format }) => {
       try {
         const { results } = await env.ISBN_DB.prepare(
           "SELECT DISTINCT category FROM books WHERE category IS NOT NULL AND category != '' ORDER BY category"
         ).all();
         const categories = results.map(r => r.category);
-        return { content: [{ type: "text", text: JSON.stringify(categories) }] };
+        return { content: [{ type: "text", text: formatCategories(categories, format) }] };
       } catch (e) {
         return { content: [{ type: "text", text: `查詢錯誤：${e.message}` }] };
       }
